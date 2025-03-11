@@ -27,7 +27,6 @@ pthread_t* tid;
 
 double Fc;
 double bandwidth;
-double* filter_coeffs;
 double* band_power;
 
 void usage() {
@@ -100,6 +99,8 @@ void* worker(void* arg) {
         end_i += start_i;
     }
 
+    double filter_coeffs[filter_order + 1];
+
     for (int band = start_i; band < end_i; band++) {
         generate_band_pass(sig->Fs,
                            band * bandwidth + 0.0001,
@@ -156,29 +157,7 @@ int analyze_signal(double* lb, double* ub) {
 
         printf("\n");
     }
-
-    /*
-//   printf("Resource usages:\n\
-// User time        %lf seconds\n\
-// System time      %lf seconds\n\
-// Page faults      %ld\n\
-// Page swaps       %ld\n\
-// Blocks of I/O    %ld\n\
-// Signals caught   %ld\n\
-// Context switches %ld\n",
-//          rdiff.usertime,
-//          rdiff.systime,
-//          rdiff.pagefaults,
-//          rdiff.pageswaps,
-//          rdiff.ioblocks,
-//          rdiff.sigs,
-//          rdiff.contextswitches);
-
-    // printf("Analysis took %llu cycles (%lf seconds) by cycle count, timing overhead=%llu cycles\n"
-    //         "Note that cycle count only makes sense if the thread stayed on one core\n",
-    //         tend - tstart, cycles_to_seconds(tend - tstart), timing_overhead());
-    // printf("Analysis took %lf seconds by basic timing\n", end - start);
-*/
+    
     return wow;
 }
 
@@ -244,7 +223,6 @@ bands:    %d\n",
 
     remove_dc(sig->data,sig->num_samples);
 
-    filter_coeffs = (double*)malloc(sizeof(double) * (filter_order + 1));
     band_power = (double*)malloc(sizeof(double) * num_bands);
 
     num_threads = atoi(argv[6]);

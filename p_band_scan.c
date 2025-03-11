@@ -17,11 +17,18 @@
 #define ALIENS_LOW  50000.0
 #define ALIENS_HIGH 150000.0
 
+int filter_order;
+int num_bands;
+signal* sig;
+
 long num_threads;
 long num_proc;
 pthread_t* tid;
 
-int* wows;
+double Fc;
+double bandwidth;
+double* filter_coeffs;
+double* band_power;
 
 void usage() {
     printf("usage: p_band_scan text|bin|mmap signal_file Fs filter_order num_bands num_threads num_processors\n");
@@ -68,16 +75,9 @@ void remove_dc(double* data, int num) {
     }
 }
 
-int analyze_signal(signal* sig, int filter_order, int num_bands, double* lb, double* ub) {
-
-    int wow = 0;
-
-    return wow;
-}
-
 void* worker(void* arg) {
     long myid = (long)arg;
-    long mytid = tid[myid];
+    // long mytid = tid[myid];
 
     cpu_set_t set;
     CPU_ZERO(&set);
@@ -87,8 +87,99 @@ void* worker(void* arg) {
         exit(-1);
     }
 
+    int bbands = num_bands / num_threads;
+    int ebands = num_bands % num_threads;
+    int start_i = myid * bbands;
+    int end_i = bbands;
+    if (myid < ebands) {
+        start_i += myid;
+        end_i += start_i + 1;
+    }
+    else {
+        start_i += ebands;
+        end_i += start_i;
+    }
+
+    for (int band = start_i; band < end_i; band++) {
+        generate_band_pass(sig->Fs,
+                           band * bandwidth + 0.0001,
+                           (band + 1) * bandwidth - 0.0001,
+                           filter_order,
+                           filter_coeffs);
+        hamming_window(filter_order,filter_coeffs);
+        convolve_and_compute_power(sig->num_samples,
+                                   sig->data,
+                                   filter_order,
+                                   filter_coeffs,
+                                   &(band_power[band]));
+    }
 
     pthread_exit(NULL);
+}
+
+int analyze_signal(double* lb, double* ub) {
+
+    double max_band_power = max_of(band_power,num_bands);
+    double avg_band_power = avg_of(band_power,num_bands);
+    int wow = 0;
+    *lb = -1;
+    *ub = -1;
+
+    for (int band = 0; band < num_bands; band++) {
+        double band_low  = band * bandwidth + 0.0001;
+        double band_high = (band + 1) * bandwidth - 0.0001;
+
+        printf("%5d %20lf to %20lf Hz: %20lf ",
+            band, band_low, band_high, band_power[band]);
+
+        for (int i = 0; i < MAXWIDTH * (band_power[band] / max_band_power); i++) {
+        printf("*");
+        }
+
+        if ((band_low >= ALIENS_LOW && band_low <= ALIENS_HIGH) ||
+            (band_high >= ALIENS_LOW && band_high <= ALIENS_HIGH)) {
+
+        // band of interest
+        if (band_power[band] > THRESHOLD * avg_band_power) {
+            printf("(WOW)");
+            wow = 1;
+            if (*lb < 0) {
+            *lb = band * bandwidth + 0.0001;
+            }
+            *ub = (band + 1) * bandwidth - 0.0001;
+        } else {
+            printf("(meh)");
+        }
+        } else {
+        printf("(meh)");
+        }
+
+        printf("\n");
+    }
+
+    /*
+//   printf("Resource usages:\n\
+// User time        %lf seconds\n\
+// System time      %lf seconds\n\
+// Page faults      %ld\n\
+// Page swaps       %ld\n\
+// Blocks of I/O    %ld\n\
+// Signals caught   %ld\n\
+// Context switches %ld\n",
+//          rdiff.usertime,
+//          rdiff.systime,
+//          rdiff.pagefaults,
+//          rdiff.pageswaps,
+//          rdiff.ioblocks,
+//          rdiff.sigs,
+//          rdiff.contextswitches);
+
+    // printf("Analysis took %llu cycles (%lf seconds) by cycle count, timing overhead=%llu cycles\n"
+    //         "Note that cycle count only makes sense if the thread stayed on one core\n",
+    //         tend - tstart, cycles_to_seconds(tend - tstart), timing_overhead());
+    // printf("Analysis took %lf seconds by basic timing\n", end - start);
+*/
+    return wow;
 }
 
 int main(int argc, char* argv[]) {
@@ -98,11 +189,11 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
-    char sig_type    = toupper(argv[1][0]);
-    char* sig_file   = argv[2];
-    double Fs        = atof(argv[3]);
-    int filter_order = atoi(argv[4]);
-    int num_bands    = atoi(argv[5]);
+    char sig_type = toupper(argv[1][0]);
+    char* sig_file = argv[2];
+    double Fs = atof(argv[3]);
+    filter_order = atoi(argv[4]);
+    num_bands = atoi(argv[5]);
 
     assert(Fs > 0.0);
     assert(filter_order > 0 && !(filter_order & 0x1));
@@ -121,7 +212,6 @@ bands:    %d\n",
 
     printf("Load or map file\n");
 
-    signal* sig;
     switch (sig_type) {
         case 'T':
         sig = load_text_format_signal(sig_file);
@@ -145,7 +235,17 @@ bands:    %d\n",
         return -1;
     }
 
-    sig->Fs = Fs;
+    sig->Fs = Fs; 
+    
+
+    // ASSIGN CONSTANTS
+    Fc = sig->Fs / 2;
+    bandwidth = Fc / num_bands;
+
+    remove_dc(sig->data,sig->num_samples);
+
+    filter_coeffs = (double*)malloc(sizeof(double) * (filter_order + 1));
+    band_power = (double*)malloc(sizeof(double) * num_bands);
 
     num_threads = atoi(argv[6]);
     num_proc = atoi(argv[7]);
@@ -168,6 +268,35 @@ bands:    %d\n",
             tid[i] = 0xdeadbeef;
         }
     }
+
+    printf("Finished starting threads (%ld started)\n", num_started);
+
+    printf("Now joining\n");
+
+    for (long i = 0; i < num_threads; i++) {
+        if (tid[i] != 0xdeadbeef) {
+            printf("Joining with %ld, tid %lu\n", i, tid[i]);
+            int returncode = pthread_join(tid[i], NULL);   //
+            if (returncode != 0) {
+                printf("Failed to join with %ld!\n", i);
+                perror("join failed");
+            } else {
+                printf("Done joining with %ld\n", i);
+            }
+        } else {
+            printf("Skipping %ld (wasn't started successfully)\n", i);
+        }
+    }
+
+    double start = 0;
+    double end   = 0;
+    if (analyze_signal(&start, &end)) {
+        printf("POSSIBLE ALIENS %lf-%lf HZ (CENTER %lf HZ)\n", start, end, (end + start) / 2.0);
+    } else {
+        printf("no aliens\n");
+    }
+
+    free_signal(sig);
 
     return 0;
 }

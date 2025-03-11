@@ -30,8 +30,8 @@ band_scan: band_scan.c filter.h signal.h timing.h libfilter.a
 # You could add p_band_scan to the "all:" rule above so it runs by default
 #
 #
-#p_band_scan: p_band_scan.c filter.h signal.h timing.h libfilter.a
-#	    $(CC) -pthread p_band_scan.c -L. -lfilter -lm -o p_band_scan
+p_band_scan: p_band_scan.c filter.h signal.h timing.h libfilter.a
+	$(CC) -pthread p_band_scan.c -L. -lfilter -lm -o p_band_scan
 #
 
 clean-filter:
